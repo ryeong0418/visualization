@@ -1,0 +1,289 @@
+from src.ppt.pd2ppt import df_to_table
+from pptx.dml.color import RGBColor
+from pptx.util import Pt
+from pptx.enum.shapes import MSO_CONNECTOR_TYPE
+from pptx.enum.dml import MSO_LINE_DASH_STYLE
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE
+from pptx.enum.text import PP_PARAGRAPH_ALIGNMENT
+from pptx.util import Inches
+import re
+
+
+class SlideManager:
+    """
+    SlideManager class
+    """
+
+    @staticmethod
+    def convert_inches_to_data(dict_position):
+        """convert inches data"""
+        for k, v in dict_position.items():
+            dict_position[k] = Inches(v)
+        return dict_position
+
+    @staticmethod
+    def read_slide(slides, text_frame_text):
+        """read specific slide"""
+        for idx, slide in enumerate(slides):
+            for shape in slide.shapes:
+                if shape.has_text_frame and shape.text_frame.text == text_frame_text:
+                    sp = shape._element  # element
+                    sp.getparent().remove(sp)
+                    return (idx, slide)
+
+    @staticmethod
+    def delete_slide(prs):
+        """delete specific slide"""
+        xml_slides = prs.slides._sldIdLst
+        xml_slides_list = list(xml_slides)
+        for idx, slide in enumerate(prs.slides):
+            for shape in slide.shapes:
+                if shape.has_text_frame and re.search(r"^#", shape.text_frame.text):
+                    xml_slides.remove(xml_slides_list[idx])
+
+    @staticmethod
+    def add_slide(prs, idx):
+        """add slide needed"""
+        source_slide = prs.slides[idx]
+        slide_layout = source_slide.slide_layout
+        copied_slide = prs.slides.add_slide(slide_layout)
+        xml_slides = prs.slides._sldIdLst
+        idx += 1
+
+        for shape in copied_slide.placeholders:
+            title_placeholder = copied_slide.placeholders[shape.placeholder_format.idx]
+            sp_title = title_placeholder.element
+            sp_title.getparent().remove(sp_title)
+        xml_slides.insert(idx, xml_slides[-1])
+
+        return idx, copied_slide
+
+    @staticmethod
+    def extract_specified_df(df, col_name, except_col, i):
+        """특정 dataframe 추출"""
+        df = df[df[col_name] == i]
+        df = df.drop(columns=except_col)
+        return df
+
+    @staticmethod
+    def create_text_box(slide, sp, content_text, font_size, font_name, bold_effect, line_space):
+        """create textbox, text"""
+        tb = slide.shapes.add_textbox(sp["left"], sp["top"], sp["width"], sp["height"])
+        tf = tb.text_frame
+
+        paragraph = tf.paragraphs[0]
+        paragraph.text = content_text
+        paragraph.font.size = font_size
+        paragraph.font.bold = bold_effect
+        paragraph.font.name = font_name
+        paragraph.line_spacing = line_space
+
+    @staticmethod
+    def create_text_frame(paragraph, content_text, font_name, font_size, font_color, font_bold, line_space):
+        """create text"""
+        paragraph.text = content_text
+        paragraph.font.name = font_name
+        paragraph.font.size = font_size
+        paragraph.font.bold = font_bold
+        paragraph.font.color.rgb = font_color
+        paragraph.line_spacing = line_space
+
+    @staticmethod
+    def create_shape(slide, type_shape, sp, fill_color, line_color, rt):
+        """create shape"""
+        shapes = slide.shapes
+        shape = shapes.add_shape(type_shape, sp["left"], sp["top"], sp["width"], sp["height"])
+
+        fill = shape.fill
+        fill.solid()
+        fill.fore_color.rgb = fill_color
+
+        shape_line = shape.line.fill
+        shape_line.solid()
+        shape_line.fore_color.rgb = line_color
+        shape.rotation = rt
+
+        return shape
+
+    @staticmethod
+    def create_connector(slide, sp):
+        """create connector"""
+
+        line = slide.shapes.add_connector(MSO_CONNECTOR_TYPE.STRAIGHT, sp["left"], sp["top"], sp["width"], sp["height"])
+        line.rotation = 0
+        line.line.dash_style = MSO_LINE_DASH_STYLE.SQUARE_DOT
+        line.line.color.rgb = RGBColor(157, 157, 157)
+        line.line.width = Pt(0.75)
+
+    @staticmethod
+    def make_max_value(max_list):
+        """make max_value"""
+        if not max_list:
+            return 10
+
+        max_value = int(max(max_list))
+
+        if 0 <= max_value <= 9:
+            max_value = 10
+
+        else:
+            num_place = 10 ** (len(str(max_value)) - 1)
+            max_value = ((max_value // num_place) + 1) * num_place
+
+        return int(max_value)
+
+    @staticmethod
+    def make_table(df, tp, slide, column_width_inches=None, row_height_exist=None):
+        """make table"""
+        shape = df_to_table(slide, df, tp["left"], tp["top"], tp["width"], tp["height"])
+        for row in shape.table.rows:
+            for cell in row.cells:
+                # 모든 셀 하얀색으로
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(255, 255, 255)
+                for paragraph in cell.text_frame.paragraphs:
+                    paragraph.font.size = Pt(8)
+
+            # # 0열 아이보리색
+            cell = row.cells[0]
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = RGBColor(242, 242, 242)
+
+        # 컬럼 (0행) 파란색으로
+        for cell in shape.table.rows[0].cells:
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = RGBColor(63, 82, 108)
+
+        if column_width_inches is not None:
+            for idx, column in enumerate(shape.table.columns):
+                column.width = column_width_inches[idx]
+
+        if not cell.text_frame.text:
+            for paragraph in cell.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    run.font.size = Pt(8)
+
+    @staticmethod
+    def insert_chart(df, category_col, value_col, instance_name):
+        """
+        :param df: df
+        :param category_col: category column
+        :param value_col: chart에 표시될 value
+        :param instance_name: instance_name
+        :return: chart, value_col의  max_value
+        """
+        chart_data = CategoryChartData()
+        chart_data.categories = df[category_col].tolist()
+        chart_data.add_series(instance_name, tuple(df[value_col].tolist()))
+        max_score_list = [df[value_col].max()]
+
+        chart_scale = SlideManager.make_max_value(max_score_list)
+
+        return chart_data, chart_scale
+
+    @staticmethod
+    def set_chart_style(chart):
+        """
+        chart style
+        """
+        # 차트 범례 표시 및 font size, font name 설정
+        chart.has_legend = True
+        chart.legend.font.name = "나눔스퀘어 네오 Light"
+        chart.legend.font.size = Pt(8)
+
+        # x축 (category) - font size, font name
+        category_axis = chart.category_axis
+        category_axis.tick_labels.font.size = Pt(6)
+        category_axis.tick_labels.font.name = "나눔스퀘어 네오 Light"
+
+        value_axis = chart.value_axis
+
+        # 눈금선 색상 - 회색
+        gridline_format = value_axis.major_gridlines.format.line
+        gridline_format.fill.solid()
+        gridline_format.fill.fore_color.rgb = RGBColor(191, 191, 191)
+
+        # y축 색상 - 흰색
+        value_axis_line_format = value_axis.format.line
+        value_axis_line_format.fill.solid()
+        value_axis_line_format.fill.fore_color.rgb = RGBColor(255, 255, 255)
+
+        # y축 - font size, font name
+        tick_labels = value_axis.tick_labels
+        tick_labels.font.size = Pt(7)
+        tick_labels.font.name = "나눔스퀘어 네오 Light"
+
+    @staticmethod
+    def set_label_style(label, label_font_color, label_font_size, label_font_name, label_font_bold, label_position):
+        """label style"""
+
+        label.data_label.font.color.rgb = label_font_color
+        label.data_label.font.size = label_font_size
+        label.data_label.font.name = label_font_name
+        label.data_label.font.bold = label_font_bold
+        label.data_label.position = label_position
+
+    @staticmethod
+    def set_label_unit_style(label, point_indx, col_tuple, label_font_color, label_font_size, label_font_name, label_font_bold, label_position):
+
+
+        for i in col_tuple:
+
+            tf = label.data_label.text_frame
+            print(tf.text)
+            tf.text = str.format(f"{col_tuple[i]}")
+            #
+            for paragraph in tf.paragraphs:
+                for run in paragraph.runs:
+                    run.font.size = label_font_size
+                    run.font.color.rgb = label_font_color
+                    run.font.name = label_font_name
+                    run.font.bold = label_font_bold
+                    # run.font.position = label_position
+
+            label.data_label.position = label_position
+
+
+    @staticmethod
+    def set_chart_marker_style(series, marker_style, marker_fill_color, marker_line_color):
+        """marker style"""
+        marker = series.marker
+        marker.style = marker_style
+        marker.format.fill.solid()
+        marker.format.fill.fore_color.rgb = marker_fill_color
+        marker.format.line.color.rgb = marker_line_color
+
+    @staticmethod
+    def set_chart_line_style(series, line_color, line_width):
+        """chart_line_style"""
+        line = series.format.line
+        line.color.rgb = line_color
+        line.width = line_width
+
+    @staticmethod
+    def set_y_axis_max_value(slide, chart_data, pt, max_scale):
+
+        """y축 max value 설정"""
+        chart = slide.shapes.add_chart(XL_CHART_TYPE.LINE, pt["x"], pt["y"], pt["cx"], pt["cy"], chart_data).chart
+
+        chart.has_title = True
+        chart.chart_title.text_frame.text = "Response Time in Seconds"
+        chart.chart_title.text_frame.paragraphs[0].font.size = Pt(9)
+        chart.chart_title.text_frame.paragraphs[0].alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
+
+        # chart.chart_title.text_frame.clear()
+
+        chart_value_axis = chart.value_axis
+        chart_value_axis.minimum_scale = 0
+        chart_value_axis.maximum_scale = int(max_scale)
+
+        tick_labels = chart_value_axis.tick_labels
+        # for i, label in enumerate(tick_labels):
+        #     print(i, label)
+
+        if chart_value_axis.maximum_scale < 100:
+            chart_interval = (chart_value_axis.maximum_scale) / 5
+            chart_value_axis.major_unit = chart_interval
+
+
